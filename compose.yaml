@@ -1,0 +1,11 @@
+services:
+  steam-family-monitor:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "11452:11452"
+    volumes:
+      - ./data:/app/data
+      - ./config.json:/app/config.json:ro
+    stop_grace_period: 45s

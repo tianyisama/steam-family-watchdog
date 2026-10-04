@@ -1,0 +1,19 @@
+{
+  "name": "steam-family-watchdog",
+  "version": "1.0.0",
+  "private": true,
+  "description": "监控 Steam 家庭库变化，通过 HTTP 接口返回新增游戏、来源成员和图片",
+  "type": "module",
+  "engines": { "node": ">=24.0.0 <25" },
+  "scripts": {
+    "setup": "node src/setup.js",
+    "login": "node src/login-web.js",
+    "login:qr": "node src/login.js",
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "qrcode": "^1.5.4",
+    "steam-session": "^1.9.4"
+  }
+}

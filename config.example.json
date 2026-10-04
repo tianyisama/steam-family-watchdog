@@ -1,0 +1,10 @@
+{
+  "host": "0.0.0.0",
+  "port": 11452,
+  "poll_seconds": 300,
+  "jitter_seconds": 10,
+  "language": "schinese",
+  "data_dir": "data",
+  "missing_confirmations": 2,
+  "member_aliases": {}
+}
