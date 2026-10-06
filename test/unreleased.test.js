@@ -55,7 +55,7 @@ test('only unreleased exclusions are added; private, partner-excluded, free game
   assert.deepEqual(normalizeApps(rows).map(app=>app.appid),[10,4115450]);
 });
 
-test('startup pushes unreleased inventory once, including on a new installation; ordinary games stay silent', () => {
+test('startup records a missing unreleased notification, including on a new installation, but never replays recorded games', () => {
   const db=new Store();
   const result=db.scan('1',[ordinary,preorder],T[0],[A,B],{}, {startupUnreleased:true});
   assert.equal(result.baseline_created,true);
@@ -67,8 +67,9 @@ test('startup pushes unreleased inventory once, including on a new installation;
   assert.equal(batch.new_games[0].observed_after,null);
   db.ack('A',batch.delivery_id);
   assert.equal(db.scan('1',[ordinary,preorder],T[1],[A,B]).event_count,0);
-  assert.equal(db.scan('1',[ordinary,preorder],T[2],[A,B],{}, {startupUnreleased:true}).event_count,1);
-  assert.equal(db.changes('A').count,1); // A later process restart explicitly requests another push.
+  assert.equal(db.scan('1',[ordinary,preorder],T[2],[A,B],{}, {startupUnreleased:true}).event_count,0);
+  assert.equal(db.changes('A').count,0);
+  assert.equal(db.status().event_count,1);
   db.close();
 });
 
@@ -82,7 +83,7 @@ test('a newly acquired preorder on startup creates one event rather than an acqu
   db.close();
 });
 
-test('monitor retries failed startup scanning, pushes only on its first successful scan, and re-enables on restart', async () => {
+test('monitor retries failed startup scanning and checks each restart without duplicating pending or ACKed history', async () => {
   const db=new Store();
   db.scan('1',[ordinary,preorder],T[0],[A,B]);
   db.changes('A');
@@ -100,8 +101,26 @@ test('monitor retries failed startup scanning, pushes only on its first successf
   assert.equal(first.startupPending,false);
   assert.equal((await first.scanOnce()).event_count,0);
   const restarted=new Monitor(db,api,config,()=>{});
-  assert.equal((await restarted.scanOnce()).event_count,1);
+  const originalBatch=db.changes('A');
   assert.equal((await restarted.scanOnce()).event_count,0);
+  assert.equal((await restarted.scanOnce()).event_count,0);
+  assert.equal(db.changes('A').delivery_id,originalBatch.delivery_id);
+  assert.equal(db.status().event_count,1);
+  db.ack('A',originalBatch.delivery_id);
+  const afterAckRestart=new Monitor(db,api,config,()=>{});
+  assert.equal((await afterAckRestart.scanOnce()).event_count,0);
+  assert.equal(db.changes('A').count,0);
+  db.close();
+});
+
+test('startup recognizes older recorded events without new flags and scopes history to the same family', () => {
+  const db=new Store();
+  db.scan('1',[ordinary,preorder],T[0],[A,B]);
+  const legacy={family_groupid:'1',appid:4115450,type:'game_added',name:'影之刃零',detected_at:T[0]};
+  db.db.prepare('INSERT INTO events(payload) VALUES (?)').run(JSON.stringify(legacy));
+  assert.equal(db.scan('1',[ordinary,preorder],T[1],[A,B],{}, {startupUnreleased:true}).event_count,0);
+  assert.equal(db.status().event_count,1);
+  assert.equal(db.scan('2',[ordinary,preorder],T[2],[A,B],{}, {startupUnreleased:true}).event_count,1);
   assert.equal(db.status().event_count,2);
   db.close();
 });

@@ -143,7 +143,13 @@ export class Store {
           if (!(id in owners) && misses + 1 < this.missingConfirmations) owners[id] = misses + 1;
         }
         const acquired = !initial && (!prior || addedOwners.length > 0);
-        const startupUnreleased = options.startupUnreleased === true && app.is_unreleased;
+        const startupCandidate = options.startupUnreleased === true && app.is_unreleased;
+        // An existing event already represents this notification, including a
+        // pending (not yet ACKed) event. Reuse it rather than adding a restart copy.
+        const previouslyRecorded = startupCandidate && this.db.prepare(`SELECT 1 AS found FROM events
+          WHERE json_extract(payload,'$.family_groupid')=?
+          AND json_extract(payload,'$.appid')=? LIMIT 1`).get(familyId, app.appid);
+        const startupUnreleased = startupCandidate && !previouslyRecorded;
         if (acquired || startupUnreleased) {
           const sourceIds = acquired && prior ? addedOwners : app.owners;
           const payload = {

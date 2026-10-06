@@ -54,8 +54,8 @@ export class Monitor {
     }
     const result = this.store.scan(this.family.id, apps, new Date().toISOString(), this.family.members,
       this.config.member_aliases, { startupUnreleased: this.startupPending });
-    // Retry a failed initial scan until it succeeds. Later polling scans do not
-    // repeat the startup notification; a new process gets its own startup scan.
+    // Retry a failed initial scan until it succeeds. Each process checks for
+    // missing startup notices; Store deduplicates against persistent history.
     this.startupPending = false;
     return result;
   }
