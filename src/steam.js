@@ -138,7 +138,9 @@ export class SteamApi {
   }
   async library(familyId, language) {
     const result = await this.call('IFamilyGroupsService', 'GetSharedLibraryApps', {
-      family_groupid: familyId, include_own: true, include_excluded: false,
+      // Preorders are returned with exclude_reason=8 until release. Fetch them
+      // too; Store retains only shareable games and this specific exclusion.
+      family_groupid: familyId, include_own: true, include_excluded: true,
       include_non_games: false, language,
     });
     if (!Array.isArray(result.apps))

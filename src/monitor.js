@@ -13,6 +13,7 @@ export class Monitor {
     this.store = store; this.api = api; this.config = config; this.log = log;
     this.family = null; this.familyExpires = 0; this.namesExpires = 0;
     this.failures = 0; this.timer = null; this.running = false; this.stopped = false;
+    this.startupPending = true;
     this.status = {
       last_attempt_at: store.meta('last_attempt_at'),
       last_error: JSON.parse(store.meta('last_error') || 'null'),
@@ -51,7 +52,12 @@ export class Monitor {
         this.log('[Steam] 成员昵称暂未取得，本次仍记录游戏及成员 SteamID。');
       }
     }
-    return this.store.scan(this.family.id, apps, new Date().toISOString(), this.family.members, this.config.member_aliases);
+    const result = this.store.scan(this.family.id, apps, new Date().toISOString(), this.family.members,
+      this.config.member_aliases, { startupUnreleased: this.startupPending });
+    // Retry a failed initial scan until it succeeds. Later polling scans do not
+    // repeat the startup notification; a new process gets its own startup scan.
+    this.startupPending = false;
+    return result;
   }
   async tick() {
     if (this.stopped || this.running) return;

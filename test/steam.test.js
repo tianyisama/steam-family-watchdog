@@ -26,6 +26,8 @@ test('expired access token refreshes once; API parameters retain SteamID64 preci
   const api = new SteamApi(auth,async url=>{
     const params=JSON.parse(url.searchParams.get('input_json'));
     assert.equal(params.family_groupid,'12345678901234567890');
+    assert.equal(params.include_excluded,true);
+    assert.equal(params.include_own,true);
     return ++calls===1 ? response({},401) : response({response:{apps:[]}});
   });
   assert.deepEqual(await api.library('12345678901234567890','schinese'),[]);

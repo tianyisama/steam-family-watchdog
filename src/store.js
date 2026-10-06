@@ -24,7 +24,8 @@ export function normalizeApps(apps) {
     if (!item || !Number.isInteger(item.appid) || item.appid <= 0 || seen.has(item.appid))
       throw new Error('Steam 返回无效或重复的 AppID；本次不覆盖库存');
     seen.add(item.appid);
-    if ((item.exclude_reason ?? 0) !== 0 || (item.app_type ?? 1) !== 1) continue;
+    const excludeReason = item.exclude_reason ?? 0;
+    if (![0, 8].includes(excludeReason) || (item.app_type ?? 1) !== 1) continue;
     if (item.owner_steamids !== undefined && !Array.isArray(item.owner_steamids))
       throw new Error('Steam 返回无效的 owner_steamids；本次不覆盖库存');
     const owners = [...new Set((item.owner_steamids || []).map(id => {
@@ -36,6 +37,8 @@ export function normalizeApps(apps) {
       appid: item.appid,
       name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : `App ${item.appid}`,
       owners,
+      exclude_reason: excludeReason,
+      is_unreleased: excludeReason === 8,
       rt_time_acquired: Number.isInteger(item.rt_time_acquired) && item.rt_time_acquired > 0
         ? item.rt_time_acquired : null,
       ...artwork(item.appid, item.capsule_filename, item.img_icon_hash),
@@ -73,6 +76,10 @@ export class Store {
         family_id TEXT NOT NULL, appid INTEGER NOT NULL, details TEXT NOT NULL,
         PRIMARY KEY(family_id, appid)
       );
+      CREATE TABLE IF NOT EXISTS game_availability (
+        family_id TEXT NOT NULL, appid INTEGER NOT NULL, exclude_reason INTEGER NOT NULL,
+        PRIMARY KEY(family_id, appid)
+      );
     `);
   }
   close() { this.db.close(); }
@@ -98,13 +105,19 @@ export class Store {
     const row = this.db.prepare('SELECT details FROM game_artwork WHERE family_id=? AND appid=?').get(familyId, appid);
     return row ? JSON.parse(row.details) : artwork(appid);
   }
+  availability(familyId, appid) {
+    const row = this.db.prepare('SELECT exclude_reason FROM game_availability WHERE family_id=? AND appid=?').get(familyId, appid);
+    const reason = row?.exclude_reason ?? 0;
+    return { exclude_reason: reason, is_unreleased: reason === 8 };
+  }
   event(row) {
     const payload = JSON.parse(row.payload);
     // Legacy events gain optional images from the snapshot. Do not rewrite
     // stored event IDs, names, owners, times or client acknowledgement positions.
-    return { event_id: row.id, ...this.artwork(payload.family_groupid, payload.appid), ...payload };
+    return { event_id: row.id, ...this.artwork(payload.family_groupid, payload.appid),
+      ...this.availability(payload.family_groupid, payload.appid), ...payload };
   }
-  scan(familyId, rawApps, detectedAt, members = [], aliases = {}) {
+  scan(familyId, rawApps, detectedAt, members = [], aliases = {}, options = {}) {
     const apps = normalizeApps(rawApps); // Validate the complete response before any write.
     return this.transaction(() => {
       const family = this.db.prepare('SELECT * FROM families WHERE id=?').get(familyId);
@@ -129,26 +142,34 @@ export class Store {
         else for (const [id, misses] of Object.entries(priorOwners)) {
           if (!(id in owners) && misses + 1 < this.missingConfirmations) owners[id] = misses + 1;
         }
-        if (!initial && (!prior || addedOwners.length)) {
-          const sourceIds = !prior ? app.owners : addedOwners;
+        const acquired = !initial && (!prior || addedOwners.length > 0);
+        const startupUnreleased = options.startupUnreleased === true && app.is_unreleased;
+        if (acquired || startupUnreleased) {
+          const sourceIds = acquired && prior ? addedOwners : app.owners;
           const payload = {
-            type: prior ? 'owner_added' : 'game_added',
+            type: acquired && prior ? 'owner_added' : 'game_added',
             family_groupid: familyId, appid: app.appid, name: app.name,
             owners: app.owners.map(steamid => ({ steamid, name: this.name(steamid, aliases) })),
             added_owners: sourceIds.map(steamid => ({ steamid, name: this.name(steamid, aliases) })),
-            source_context: sourceIds.some(id => joined.has(id)) ? 'member_joined' : 'library_change',
+            source_context: !acquired && startupUnreleased ? 'startup_unreleased'
+              : sourceIds.some(id => joined.has(id)) ? 'member_joined' : 'library_change',
+            startup_scan: startupUnreleased,
             detected_at: detectedAt,
-            observed_after: family.last_scan,
+            observed_after: family?.last_scan ?? null,
             observed_until: detectedAt,
             rt_time_acquired: app.rt_time_acquired,
             steam_acquired_at: app.rt_time_acquired ? new Date(app.rt_time_acquired * 1000).toISOString() : null,
             acquired_time_verified: false,
+            exclude_reason: app.exclude_reason,
+            is_unreleased: app.is_unreleased,
             ...artwork(app.appid, app.capsule_filename, app.img_icon_hash),
           };
           this.db.prepare('INSERT INTO events(payload) VALUES (?)').run(json(payload));
           count++;
         }
         insert.run(familyId, app.appid, app.name, json(owners), app.rt_time_acquired);
+        this.db.prepare(`INSERT INTO game_availability VALUES (?,?,?) ON CONFLICT(family_id,appid)
+          DO UPDATE SET exclude_reason=excluded.exclude_reason`).run(familyId, app.appid, app.exclude_reason);
         this.db.prepare(`INSERT INTO game_artwork VALUES (?,?,?) ON CONFLICT(family_id,appid)
           DO UPDATE SET details=excluded.details`).run(familyId, app.appid,
             json(artwork(app.appid, app.capsule_filename, app.img_icon_hash)));
@@ -229,7 +250,7 @@ export class Store {
     const familyId = this.meta('active_family');
     return this.db.prepare('SELECT * FROM games WHERE family_id=? AND missing=0 ORDER BY name').all(familyId)
       .map(row => ({ appid: row.appid, name: row.name, owner_steamids: idsOf(row.owners), rt_time_acquired: row.acquired,
-        ...this.artwork(familyId, row.appid) }));
+        ...this.artwork(familyId, row.appid), ...this.availability(familyId, row.appid) }));
   }
   status() {
     return {
